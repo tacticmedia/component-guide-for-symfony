@@ -1,0 +1,103 @@
+# AI Bundle (`symfony/ai-bundle`): details
+
+**Applies to:** Symfony AI 0.14
+
+## Key features and concepts
+
+- **Install the parts that you use:** the bundle requires only `symfony/ai-platform`. For `ai.agent` and `ai.multi_agent`, install `symfony/ai-agent`. For stores, vectorizers, indexers and retrievers, install `symfony/ai-store`. For message stores and chats, install `symfony/ai-chat`. Each platform type and most store and message store types also need a bridge package, for example `symfony/ai-open-ai-platform` or `symfony/ai-chroma-db-store`. The `memory` store and the `memory` message store need no bridge package. If a package is missing, the container build throws a `RuntimeException` that names the `composer require` command. Only the `decart` platform type has no such check. The Flex recipe registers `AiBundle` and creates `config/packages/ai.yaml` with commented examples.
+- **Platforms:** each key under `ai.platform` creates the service `ai.platform.<type>`, for example `ai.platform.openai` from `ai.platform.openai.api_key`. The bundle knows 37 types. The types `azure`, `bedrock`, `cache`, `failover`, `generic` and `openresponses` take named instances (`ai.platform.<type>.<name>`). Most types take an `http_client` service ID (default `http_client`). For the asynchronous jobs of `edenai`, `higgsfield`, `minimax`, `openai` and `venice`, the bundle registers `ai.platform.job_client.<type>`. `JobRunner` waits for the job result. Entry point: `ai.platform.<type>`.
+- **Platform decorators and generic platforms:** `generic` connects to a server with the OpenAI API (for example LiteLLM) through `base_url` and an optional `model_catalog` service. `openresponses` connects to a server with the OpenAI Responses API (`POST /v1/responses`). `failover` calls the next service in `platforms` when `invoke()` of a platform throws an exception. An HTTP error of a lazy response occurs only when code reads the result, so this error does not start the fallback. `failover` needs `rate_limiter`, the service ID of a rate limiter factory (for example `limiter.failover_platform`). `cache` wraps the service in `platform` and stores results in the pool `service`, with `cache_key` and `ttl`. It caches only calls that pass the `prompt_cache_key` option. The pool must be tag-aware. With the default `framework.cache.app` adapter, the default pool `cache.app` causes a `TypeError` at the first call, so set `service: 'cache.app.taggable'`. Entry points: `ai.platform.failover.<name>`, `ai.platform.cache.<name>`.
+- **Models:** write `model` as a string with options in a query string (`'gpt-4o-mini?temperature=0.7'`), or as `{ name, options }`. Do not use both forms in one model. To add a model to the catalog of a platform, use `ai.model.<platform>.<model>` with `class` and `capabilities`. The bundle ignores this key for a platform without the catalog service `ai.platform.model_catalog.<platform>`, for example `ollama`. Entry point: `ai.agent.<name>.model`.
+- **Agents:** each key under `ai.agent` creates the service `ai.agent.<name>`. `AgentInterface::call($input, $options)` returns a lazy `Execution`; the agent runs when code reads the result, for example with `getContent()`, `getResult()` or `asText()`. The `platform` option defaults to the `PlatformInterface` alias. This alias exists only when exactly one platform service exists, and a `cache` or `failover` entry is a platform service too. Without the alias, an agent without `platform` stops the container build with a `ServiceNotFoundException`. In that case, set `platform` to a service ID, for example `ai.platform.openai`. `speech` adds speech-to-text and text-to-speech around the agent (`SpeechAgent`). Entry point: `ai.agent.<name>`.
+- **System prompt and memory:** `prompt` takes a string, or `text` or `file` with `include_tools`, `enable_translation` and `translation_domain`. `enable_translation` works only with `text` and needs the `translator` service. A file prompt can contain `{placeholder}` markers; pass their values in the `template_vars` call option. `memory` takes static text, or `{ service: '<id>' }` for a `MemoryProviderInterface` service. Entry points: `ai.agent.<name>.prompt`, `ai.agent.<name>.memory`.
+- **Tools:** tools are opt-in. `tools: true` gives the agent all services with `#[AsTool]` (tag `ai.tool`). A list gives only the listed tools: a class or service ID, `{ service, name, description, method }`, or `{ agent: '<name>', name, description }` to use another agent as a tool. A tool package such as `symfony/ai-wikipedia-tool` has a Flex recipe that registers its tool as a service. `max_tool_calls` limits the tool loop to 50 rounds by default, and one round can contain several tool calls. After the limit, the agent throws `MaxIterationsExceededException`; `null` removes the limit. `fault_tolerant_toolbox` (default `true`) catches tool errors and sends a short error text to the model, so the agent run continues. `tools.execution_strategy` selects `sequential` (default), `fiber`, or the service ID of a `ToolExecutorInterface`. With this option, put the tool list under `tools.services`. Entry point: `ai.agent.<name>.tools`.
+- **Tools of a remote MCP server:** the entry `{ mcp_server: '<client>.<server>' }` gives the agent the tools of the connection `mcp.client.<client>.server.<server>` from `mcp.clients` (MCP Bundle). It needs `symfony/ai-mcp-tool` and `symfony/mcp-bundle`. The tool names get the prefix `<server>_`, or the value of `prefix`. If the toolbox cannot get the tool list of the server, the agent gets no tools from that server for 60 seconds. The other tools keep working.
+- **Tool access and approval:** `#[IsGrantedTool('ROLE_ADMIN')]` on a tool class or method checks the attribute before the tool runs. It needs `symfony/security-core` and the `security.authorization_checker` service. If the check fails and the toolbox is fault tolerant, the model receives `An error occurred while executing tool "<name>".` For a human approval step, listen to `ToolCallRequested` with `#[AsEventListener]`. In the listener, call `deny($reason)` or `setResult()` on the event.
+- **Validation and structured output:** the bundle registers `PlatformSubscriber`, so the call option `response_format` (for example `['response_format' => MyDto::class]`) gives an object. Read it with `asObject()` on the result of `call()`. If you install `symfony/validator`, the bundle validates that object with its Validator constraints. It also validates tool arguments before the tool runs: objects with their Validator constraints, scalar and array values only with their `#[Schema]` keywords. If the toolbox is fault tolerant, the model receives the violations of invalid tool arguments. The bundle autoconfigures classes that implement `SchemaProviderInterface`, and it checks each `#[Schema(provider: ...)]` reference of a tool when it builds the container.
+- **Processors:** `#[AsInputProcessor(agent: 'ai.agent.<name>', priority: 10)]` and `#[AsOutputProcessor]` register a processor for one agent. The `agent` value is the service ID, not the configuration name. Without `agent`, or with only the `InputProcessorInterface` or `OutputProcessorInterface` interface, the processor applies to all agents except multi-agents. A processor with a higher priority runs first.
+- **Multi-agent routing:** `ai.multi_agent.<name>` takes `orchestrator`, `handoffs` (agent name to a list of keywords for the routing) and `fallback`. Use the agent names from `ai.agent`, not service IDs. The orchestrator agent selects an agent from the first user message of the input. The selected agent receives only that message, not the earlier conversation. Entry point: the service `ai.multi_agent.<name>`, which implements `AgentInterface`.
+- **RAG pipeline:** `ai.store.<type>.<name>` creates a store (25 types, for example `chromadb`, `postgres`, `redis`, `memory`). `ai.vectorizer.<name>` creates embeddings with a platform and a model. `ai.indexer.<name>` joins `loader`, `source`, `transformers`, `filters`, `vectorizer` and `store`. The values of `loader`, `transformers` and `filters` are service IDs, so register these classes as services. `ai.retriever.<name>` searches a store with a vectorizer. The bundle has no default `VectorizerInterface` alias, so set `vectorizer` on each indexer and retriever. Run `ai:store:setup`, then `ai:store:index`. To let an agent search the store, register `SimilaritySearch` (`symfony/ai-similarity-search-tool`) as a service with `$retriever: '@ai.retriever.<name>'`. Then add it to the `tools` of the agent. Entry points: `IndexerInterface`, `RetrieverInterface`, `StoreInterface`.
+- **Chats and message stores:** `ai.message_store.<type>.<name>` keeps a conversation in `cache`, `cloudflare`, `doctrine` (`dbal`), `meilisearch`, `memory`, `mongodb`, `pogocache`, `redis`, `session` or `surrealdb`. Each store keeps one history under its configured key, identifier, table, index, collection or namespace. Only the `session` type keeps one history for each user session. `ai.chat.<name>` joins an `agent` and a `message_store`, both as service IDs, for example `ai.agent.youtube` and `ai.message_store.cache.youtube`. `ChatInterface::submit()` adds the user message, calls the agent and stores the answer. The `meilisearch` type fails because the bundle gives it wrong constructor arguments. The `doctrine` type inserts the full history as a new row on each save, so the loaded history repeats messages. Entry point: `ChatInterface`.
+- **Profiler and tests:** in debug mode, the bundle decorates platforms, agents, toolboxes, stores, message stores and chats. The "Symfony AI" profiler panel shows each platform call with its input, options, result and metadata (for example token usage). It also shows the registered tools and the tool calls. The timeline shows agent calls, platform calls and tool executions in the category `ai`. In a `WebTestCase`, `AiAssertionsTrait` asserts platform calls, models and tools after `$client->enableProfiler()`.
+
+## Entry points
+
+- `Symfony\AI\Agent\AgentInterface`: the alias exists when the configuration has exactly one agent. For one of several agents, use `#[Target('<name>')] AgentInterface $agent` or `#[Autowire(service: 'ai.agent.<name>')]`. Multi-agents also get `#[Target('<name>')]`.
+- `Symfony\AI\Platform\PlatformInterface`: the alias exists when exactly one platform service exists. Otherwise, use `#[Autowire(service: 'ai.platform.<type>')]`.
+- `Symfony\AI\Store\StoreInterface`: the alias exists when the configuration has exactly one store. Otherwise, use `#[Target('<name>')]` or `#[Target('<type>_<name>')]`. If two store types use the same name, use `#[Target('<type>_<name>')]`. A `mongodb` or `surrealdb` message store also registers `StoreInterface` aliases for its name. With a name conflict, use `#[Autowire(service: 'ai.store.<type>.<name>')]`.
+- `Symfony\AI\Store\Document\VectorizerInterface`, `Symfony\AI\Store\IndexerInterface`, `Symfony\AI\Store\RetrieverInterface`: use `#[Target('<name>')]`. `IndexerInterface` and `RetrieverInterface` also have an alias when the configuration has exactly one indexer or one retriever.
+- `Symfony\AI\Chat\ChatInterface` and `Symfony\AI\Chat\MessageStoreInterface`: an alias when the configuration has exactly one chat or one message store, else `#[Target('<name>')]`. For the `doctrine`, `mongodb` and `surrealdb` message store types, use the service ID with `#[Autowire(service: ...)]`: `ai.message_store.doctrine.dbal.<name>`, `ai.message_store.mongodb.<name>` or `ai.message_store.surrealdb.<name>`.
+- `Symfony\AI\Platform\Job\JobRunner` (service `ai.platform.job_runner`) and `Symfony\AI\Platform\Job\JobClientInterface` with `#[Target('<type>')]`, or `#[AutowireLocator('ai.platform.job_client', indexAttribute: 'key')]`.
+- `Symfony\AI\Platform\StructuredOutput\ResponseFormatFactoryInterface` (service `ai.platform.response_format_factory`).
+- Attributes: `Symfony\AI\Agent\Toolbox\Attribute\AsTool`, `Symfony\AI\Agent\Attribute\AsInputProcessor`, `Symfony\AI\Agent\Attribute\AsOutputProcessor`, `Symfony\AI\AiBundle\Security\Attribute\IsGrantedTool`, `Symfony\AI\Platform\Contract\JsonSchema\Attribute\Schema` (with `provider`).
+- Autoconfigured interfaces: `Symfony\AI\Agent\InputProcessorInterface`, `Symfony\AI\Agent\OutputProcessorInterface`, `Symfony\AI\Platform\Contract\JsonSchema\Provider\SchemaProviderInterface`, `Symfony\AI\Platform\ModelClientInterface`, `Symfony\AI\Platform\ResultConverterInterface`.
+- Interfaces for your own services: `Symfony\AI\Agent\Memory\MemoryProviderInterface` (`memory.service`), `Symfony\AI\Agent\Toolbox\ToolExecutorInterface` (`tools.execution_strategy`).
+- Event: `Symfony\AI\Agent\Toolbox\Event\ToolCallRequested` (`deny()`, `setResult()`).
+- RAG tool: `Symfony\AI\Agent\Bridge\SimilaritySearch\SimilaritySearch` (package `symfony/ai-similarity-search-tool`, tool name `similarity_search`).
+- Config keys: `ai.platform.<type>`, `ai.model.<platform>.<model>`, `ai.agent.<name>`, `ai.multi_agent.<name>`, `ai.store.<type>.<name>`, `ai.vectorizer.<name>`, `ai.indexer.<name>`, `ai.retriever.<name>`, `ai.message_store.<type>.<name>`, `ai.chat.<name>`.
+- Service IDs: `ai.platform.<type>[.<name>]`, `ai.agent.<name>`, `ai.toolbox.<name>` (decorate it for dynamic tools), `ai.multi_agent.<name>`, `ai.store.<type>.<name>`, `ai.vectorizer.<name>`, `ai.indexer.<name>`, `ai.retriever.<name>`, `ai.message_store.<type>.<name>`, `ai.chat.<name>`.
+- Console commands:
+  - `ai:platform:invoke [platform] [model] [message]`: send one message to a platform. The command asks for missing values.
+  - `ai:agent:call <agent>` (alias `ai:chat`): chat with an agent in the terminal.
+  - `ai:store:setup <store-service-id>`: create the infrastructure of a store, with its `setup_options`.
+  - `ai:store:index <indexer> [--source=...]`: index the configured or given sources. The indexer must have a `loader`.
+  - `ai:store:retrieve <retriever> [query] [--limit=10]`: search a store.
+  - `ai:store:clear <store-service-id> --force`: remove all documents and keep the store.
+  - `ai:store:drop <store-service-id> --force`: remove the store infrastructure. In debug mode, it does nothing for `azuresearch` and `supabase` stores but reports success.
+  - `ai:message-store:setup <message-store-service-id>` and `ai:message-store:drop <message-store-service-id> --force`.
+- Test helper: `Symfony\AI\AiBundle\Test\AiAssertionsTrait` with `assertPlatformCallCount()`, `assertModelCalled()`, `assertToolCalled()`, `assertToolCallCount()`, `assertToolRegistered()` and `getAiDataCollector()`.
+- Profiler: the data collector `ai` (template `@Ai/data_collector.html.twig`), only when `kernel.debug` is `true`.
+
+## Symbiotic packages
+
+- [AI Platform](../packages/ai-platform.md): the bundle requires it; each `ai.platform` entry creates a platform from a bridge package, and `ai.vectorizer` uses a platform for embeddings.
+- [AI Agent](../packages/ai-agent.md): install it for `ai.agent` and `ai.multi_agent`; the bundle creates the agents, toolboxes and processors and autoconfigures `#[AsTool]`.
+- [AI Store](../packages/ai-store.md): install it for `ai.store`, `ai.vectorizer`, `ai.indexer` and `ai.retriever`; it provides the `ai:store:*` commands that the bundle registers.
+- [AI Chat](../packages/ai-chat.md): install it for `ai.message_store` and `ai.chat`; it provides the `ai:message-store:*` commands that the bundle registers.
+- [MCP Bundle](../packages/mcp-bundle.md): an `mcp_server` tool entry uses a client connection from `mcp.clients`. To expose your own tools, prompts and resources to MCP clients, use MCP Bundle as a server.
+- [AI Mate](../packages/ai-mate.md): a development CLI that gives coding agents tools for your project. For AI features that run in the application, use the AI Bundle.
+- [Security](../packages/security-bundle.md): `#[IsGrantedTool]` uses `security.authorization_checker` to check a role or a voter attribute before a tool runs.
+- [Validator](../packages/validator.md): with this package, the bundle validates structured-output objects and tool-call arguments (objects with their constraints, scalar and array values with `#[Schema]` keywords).
+- [WebProfilerBundle](../packages/web-profiler-bundle.md): shows the "Symfony AI" panel, the toolbar item and the `ai` timeline category in debug mode.
+- [FrameworkBundle test tools](../packages/framework-bundle-testing.md): `AiAssertionsTrait` reads the `ai` profiler data of a `KernelBrowser` request in a `WebTestCase`.
+- [DependencyInjection](../packages/dependency-injection.md): use `#[Target('<name>')]` or `#[Autowire(service: ...)]` to select one of several agents, stores or indexers; Symfony 8.1 deprecates a match on the argument name alone.
+- [EventDispatcher](../packages/event-dispatcher.md): a listener on `ToolCallRequested` can deny a tool call or give its result (human approval).
+- [Translation](../packages/translation.md): `prompt.enable_translation` translates the system prompt with `translation_domain`; it needs `symfony/translation`.
+- [ExpressionLanguage](../packages/expression-language.md): when the application has this package, the bundle adds the expression renderer for message templates, and `#[IsGrantedTool]` accepts an `Expression`.
+- [Cache](../packages/cache.md): the `cache` platform, store and message store keep data in a cache pool; the `cache` platform needs a tag-aware pool such as `cache.app.taggable`.
+- [HttpClient](../packages/http-client.md): most platform types and most HTTP store types take an `http_client` service ID. Set it to your own client for custom timeouts, proxy or TLS options.
+- [RateLimiter](../packages/rate-limiter.md): the `failover` platform needs a `rate_limiter` service, for example `limiter.<name>` from `framework.rate_limiter`.
+- [Serializer](../packages/serializer.md): the `cache` platform and all message store types except `cache`, `memory` and `session` use the `serializer` service to store results and messages.
+
+## Changed in 0.2 to 0.14
+
+- 0.2: agent aliases lost their suffix: `AgentInterface $blogAgent` -> `AgentInterface $blog`. On Symfony 8.1, write `#[Target('blog')] AgentInterface $agent`.
+- 0.4: Ollama `host_url` -> `endpoint`. Sub-agent tool services `ai.toolbox.<agent>.agent_wrapper.<tool>` -> `ai.toolbox.<agent>.subagent.<tool>`.
+- 0.10: tools are opt-in. An agent without `tools` gets no toolbox. Add `tools: true`, or list the tools. `prompt.include_tools` without tools throws an exception.
+- 0.10: `max_tool_calls` limits the tool loop to 50 rounds by default and then throws `MaxIterationsExceededException`. Set `max_tool_calls: null` for no limit.
+- 0.11: new `ai:store:clear`, `AiAssertionsTrait` and the autoconfiguration of `SchemaProviderInterface`.
+- 0.13: `keep_tool_messages` -> `exclude_tool_messages`. Replace `keep_tool_messages: true` with `exclude_tool_messages: true`; the behavior stays the same.
+- 0.13: `AgentInterface::call()` returns a lazy `Execution`, which implements `ResultInterface`. Before an `instanceof TextResult` check, call `getResult()`. The agent runs, and throws its exceptions, only when code reads the result or iterates the execution.
+- 0.14: new `tools.execution_strategy`, `mcp_server` tool entries, `JobRunner` with job clients, and agent, platform and tool events in the profiler timeline.
+
+## Status
+
+- 0.x and experimental: the README says "This Bundle is experimental", and the Symfony backward compatibility promise does not cover it. Minor versions break the API, for example 0.10 and 0.13. Before an update, read `UPGRADE.md` of symfony/ai.
+- The bundle needs PHP 8.2 or higher and the Symfony components in version 7.3, 7.4 or 8.x. Its dependency `symfony/ai-platform` needs the `fileinfo` PHP extension.
+
+## Docs
+
+- https://symfony.com/doc/current/ai/bundles/ai-bundle.html
+- https://symfony.com/doc/current/ai/index.html
+- https://symfony.com/doc/current/ai/cookbook/ai-bundle-fast-track.html
+- https://symfony.com/doc/current/ai/components/store.html
+- https://symfony.com/doc/current/ai/components/chat.html
+- https://symfony.com/doc/current/ai/components/platform.html
+- https://symfony.com/doc/current/ai/cookbook/rag-implementation.html
+- https://symfony.com/doc/current/ai/cookbook/chatbot-with-memory.html
+- https://symfony.com/doc/current/ai/cookbook/human-in-the-loop.html
+- https://symfony.com/doc/current/ai/cookbook/runtime-driven-tool-parameters.html
+- https://symfony.com/doc/current/ai/cookbook/dynamic-tools.html
+- https://symfony.com/doc/current/ai/cookbook/generator-reviewer-loop.html
+- https://symfony.com/doc/current/ai/cookbook/context-compression.html
+- https://symfony.com/doc/current/contributing/code/bc.html

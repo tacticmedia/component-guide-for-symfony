@@ -1,0 +1,70 @@
+# RateLimiter (`symfony/rate-limiter`): details
+
+**Applies to:** Symfony 8.1
+
+## Key features and concepts
+
+- **Named limiters:** each entry under `framework.rate_limiter` becomes a `RateLimiterFactoryInterface` service with the ID `limiter.<name>`. `create($key)` returns one limiter for each key, for example a client IP, a username or an API key. If you give no key, all callers share one limiter. The `interval` is a number and a unit of the PHP relative date formats, for example `'15 minutes'` or `'1 day'`. Entry point: `framework.rate_limiter.<name>`, `RateLimiterFactoryInterface::create()`.
+- **Injection by target name:** inject a limiter factory with `#[Target('anonymous_api')] RateLimiterFactoryInterface $limiter`. The target name is the limiter name. Symfony 8.1 deprecates the selection by argument name only, for example `RateLimiterFactoryInterface $anonymousApiLimiter`. Entry point: `Symfony\Component\DependencyInjection\Attribute\Target`.
+- **Fixed window (`fixed_window`):** the limiter accepts `limit` hits in each `interval`, and a window starts at the first hit. Around the edge between two windows, a client can send almost two times the limit in a short time. Entry point: `policy: fixed_window`, `Policy\FixedWindowLimiter`.
+- **Sliding window (`sliding_window`):** the limiter adds a weighted part of the hits of the previous window to the hits of the current window. This reduces the bursts at the window edges. Entry point: `policy: sliding_window`, `Policy\SlidingWindowLimiter`.
+- **Token bucket (`token_bucket`):** the bucket holds up to `limit` tokens. The limiter adds `rate.amount` tokens (default 1) after each `rate.interval`, and the tokens never go above `limit`. Use it to allow a burst first and a steady rate after the burst. Entry point: `policy: token_bucket`, `rate: { interval: '15 minutes', amount: 500 }`, `Policy\TokenBucketLimiter`, `Policy\Rate`.
+- **Compound (`compound`):** a compound limiter consumes tokens from each limiter in `limiters` and returns the most restrictive result. When one limiter rejects a hit, the limiters that accept it still take its tokens. Each name in `limiters` must be a non-compound limiter under `framework.rate_limiter`. A compound limiter does not support `reserve()`. To wait with a compound limiter, use a loop of `consume()` and `RateLimit::wait()` until `isAccepted()` is true. Entry point: `policy: compound`, `limiters: [two_per_minute, five_per_hour]`, `CompoundRateLimiterFactory`, `CompoundLimiter`.
+- **No limit (`no_limit`):** the limiter accepts every hit and needs no `limit`. Use it when code needs a limiter, but no limit must apply. Entry point: `policy: no_limit`, `Policy\NoLimiter`.
+- **`consume()` against `reserve()`:** `consume($tokens)` takes the tokens now or rejects the hit, and it never waits. To check the result, call `isAccepted()` on the returned `RateLimit`. To throw `RateLimitExceededException` on a rejection, call `ensureAccepted()`. `reserve($tokens, $maxTime)` books tokens, also tokens that become free only in the future, and returns a `Reservation`. Call `wait()` on the reservation to sleep until the tokens are free. If the wait is longer than `$maxTime` seconds, `reserve()` throws `MaxWaitDurationExceededException`. Use `reserve()` only when the process waits, because other processes cannot use the reserved tokens. Entry point: `LimiterInterface::consume()`, `LimiterInterface::reserve()`, `LimiterInterface::reset()`, `RateLimit`, `Reservation`.
+- **Controller attribute (8.1):** put `#[RateLimit('api')]` on a controller method or class. When a client goes above the limit, Symfony throws `TooManyRequestsHttpException`, and the response has the status 429 and a `Retry-After` header. By default, the key is the client IP, the HTTP method and the path. The argument `key` takes a string, an `Expression` or a static closure (a closure in an attribute needs PHP 8.5 or higher). The argument `tokens` sets the cost of one request (default 1). The argument `methods` limits only some HTTP methods, and `GET` also covers `HEAD`. You can repeat the attribute, and each limit must accept the request. Entry point: `Symfony\Component\HttpKernel\Attribute\RateLimit`.
+- **Rate-limit headers:** the `#[RateLimit]` attribute sets only the `Retry-After` header. To show the quota, add `X-RateLimit-Remaining` (`getRemainingTokens()`) and `X-RateLimit-Limit` (`getLimit()`) to the response yourself. Give the seconds until `getRetryAfter()` to `TooManyRequestsHttpException`, and it sets `Retry-After`. Entry point: `RateLimit`, `Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException`.
+- **State storage:** by default, all limiters keep their state in the `cache.rate_limiter` pool, a child of `cache.app`. The docs warn that a cache clear resets the limiters. Set `cache_pool` to use a different pool. By default, `cache.app` writes to the cache directory of each server, so each server counts its own hits. If several servers must share one limit, set `cache_pool` to a pool on a shared backend, for example Redis. Set `storage_service` to the ID of your own `StorageInterface` service; it has priority over `cache_pool`. Standalone code gives `CacheStorage` (a PSR-6 pool) or `InMemoryStorage` (memory of one PHP process) to `RateLimiterFactory`. Entry point: `cache_pool`, `storage_service`, `Storage\StorageInterface`, `Storage\CacheStorage`, `Storage\InMemoryStorage`.
+- **Locks:** a limiter holds a lock while it reads and writes its state, against race conditions between parallel requests. The default `lock_factory: auto` uses the `lock.factory` service. Only the `default` resource under `framework.lock` creates this service. If the service does not exist, the limiter uses no lock. The default store of `lock.factory` (`semaphore` or `flock`) is local to one server. To use another store, add a `rate_limiter` resource next to the `default` resource under `framework.lock`. Then set `lock_factory` to `lock.rate_limiter.factory`. To disable the lock, set `lock_factory: null`. Entry point: `framework.rate_limiter.<name>.lock_factory`.
+- **Calendar windows (8.1):** for the `fixed_window` policy only, `anchor_at` starts the windows at `anchor_at + n × interval` instead of at the first hit. An example is a quota that resets on the 5th day of each month. In `framework.rate_limiter`, the `interval` must use months or years, for example `'1 month'`. Symfony reads a date string without a time zone as UTC. Entry point: `framework.rate_limiter.<name>.anchor_at`, the `$anchorAt` argument of `FixedWindowLimiter`.
+- **Login throttling:** `login_throttling` on a firewall limits failed logins. By default, it allows 5 failed logins (`max_attempts`) per minute (`interval`) for each IP address and username. For each IP address, it allows 5 times `max_attempts` failed logins. Both default limiters use the `fixed_window` policy. For other rules, set `limiter` to the ID of a service that implements `RequestRateLimiterInterface`. An example is a `DefaultLoginRateLimiter` with two of your limiters and a secret. If the service also implements `PeekableRequestRateLimiterInterface`, as `AbstractRequestRateLimiter` does, only failed logins take a token. Otherwise, each login attempt takes a token. When the client reaches a limit, the login fails with `TooManyLoginAttemptsAuthenticationException`. Entry point: `security.firewalls.<name>.login_throttling`.
+- **Outgoing HTTP requests and Messenger workers:** set `rate_limiter: <limiter name>` on a scoped HTTP client or in `default_options`. Symfony then wraps the client in `ThrottlingHttpClient`, which reserves a token for each request and delays the request until the token is free. Set `rate_limiter: <limiter name>` on a Messenger transport to slow down its worker. When the transport reaches the limit, the whole worker waits. Give a rate-limited transport its own worker. Both features create the limiter without a key, so all requests of a client, or all messages of a transport, share one limit. `ThrottlingHttpClient` calls `reserve()` for each request, and the worker calls `reserve()` after a rejected `consume()`. `CompoundLimiter::reserve()` throws `ReserveNotSupportedException`. Do not use a `compound` limiter for these features. Entry point: `framework.http_client.scoped_clients.<name>.rate_limiter`, `framework.messenger.transports.<name>.rate_limiter`, `ThrottlingHttpClient`, `WorkerRateLimitedEvent`.
+
+## Entry points
+
+- `Symfony\Component\RateLimiter\RateLimiterFactoryInterface`: autowire it with `#[Symfony\Component\DependencyInjection\Attribute\Target('<limiter name>')]`. The service ID is `limiter.<limiter name>`.
+- `Symfony\Component\RateLimiter\LimiterInterface`: the result of `create()`, with `consume()`, `reserve()` and `reset()`.
+- `Symfony\Component\RateLimiter\RateLimit` and `Symfony\Component\RateLimiter\Reservation`: the results of `consume()` and `reserve()`.
+- `#[Symfony\Component\HttpKernel\Attribute\RateLimit]`: limits a controller method or class (8.1).
+- `framework.rate_limiter.<name>` (or `framework.rate_limiter.limiters.<name>`): `policy`, `limit`, `interval`, `rate.interval`, `rate.amount`, `limiters`, `anchor_at`, `cache_pool`, `storage_service`, `lock_factory`.
+- `framework.http_client.default_options.rate_limiter` and `framework.http_client.scoped_clients.<name>.rate_limiter`: the name of a limiter for outgoing requests.
+- `framework.messenger.transports.<name>.rate_limiter`: the name of a limiter for the worker of a transport.
+- `security.firewalls.<name>.login_throttling`: `max_attempts`, `interval`, `limiter`, `lock_factory`, `cache_pool`, `storage_service`.
+- Services and tags: the `cache.rate_limiter` cache pool; the `rate_limiter` service tag (attribute `name`) on each `framework.rate_limiter` limiter, for a tagged iterator or locator.
+- Extension points: `Symfony\Component\RateLimiter\Storage\StorageInterface`; `Symfony\Component\HttpFoundation\RateLimiter\RequestRateLimiterInterface` and `AbstractRequestRateLimiter` (limits from request data); `Symfony\Component\Security\Http\RateLimiter\DefaultLoginRateLimiter`.
+- Without FrameworkBundle: `Symfony\Component\RateLimiter\RateLimiterFactory` with `Storage\InMemoryStorage` or `Storage\CacheStorage`; `Symfony\Component\HttpClient\ThrottlingHttpClient`.
+- Exceptions: `Symfony\Component\RateLimiter\Exception\RateLimitExceededException`, `MaxWaitDurationExceededException` and `ReserveNotSupportedException`; `Symfony\Component\HttpKernel\Exception\TooManyRequestsHttpException`; `Symfony\Component\Security\Core\Exception\TooManyLoginAttemptsAuthenticationException`.
+- Event: `Symfony\Component\Messenger\Event\WorkerRateLimitedEvent` (a worker waits for a token).
+- Console commands, Twig functions and test helpers: none.
+
+## Symbiotic packages
+
+- [FrameworkBundle](../packages/framework-bundle.md): FrameworkBundle creates a `limiter.<name>` service for each entry under `framework.rate_limiter` and registers the listener of `#[RateLimit]`.
+- [HttpKernel](../packages/http-kernel.md): HttpKernel defines `#[RateLimit]` and `TooManyRequestsHttpException`, which becomes a 429 response, with a `Retry-After` header if you give the seconds.
+- [Security](../packages/security-bundle.md): by default, the firewall option `login_throttling` creates two rate limiters per firewall and stops a login when the client reaches one limit.
+- [HttpFoundation](../packages/http-foundation.md): `RequestRateLimiterInterface` and `AbstractRequestRateLimiter` combine several limiters with keys from the `Request`.
+- [HttpClient](../packages/http-client.md): the client option `rate_limiter` wraps the client in `ThrottlingHttpClient`, which delays outgoing requests.
+- [Messenger](../packages/messenger.md): the transport option `rate_limiter` slows down a worker, and `WorkerRateLimitedEvent` tells you when the worker waits.
+- [Cache](../packages/cache.md): `CacheStorage` keeps the limiter state in a cache pool, which is `cache.rate_limiter` by default.
+- [Lock](../packages/lock.md): limiters lock their state against race conditions; for exclusive access to a task by one process, use Lock instead.
+- [Semaphore](../packages/semaphore.md): Semaphore limits how many processes use a resource at the same time, and RateLimiter limits how often an event happens in a period.
+- [DependencyInjection](../packages/dependency-injection.md): `#[Target('<limiter name>')]` selects a limiter factory, and 8.1 deprecates the selection by argument name only.
+- [ExpressionLanguage](../packages/expression-language.md): an `Expression` can calculate the `key` of `#[RateLimit]` from the `request`, `args` and `this` variables.
+- [AI Platform](../packages/ai-platform.md): `FailoverPlatform` (package `symfony/ai-failover-platform`) requires a `RateLimiterFactoryInterface` and creates one limiter for each class of AI platform that it calls.
+
+## Changed in 8.0/8.1
+
+- 8.1 adds the `#[RateLimit]` controller attribute -> use it, not a custom attribute with a `kernel.controller_arguments` listener.
+- 8.1 adds `anchor_at` to `fixed_window` limiters -> use it, not a cron job, for quotas that reset on calendar dates.
+- 8.0 removes the autowiring aliases for the concrete `RateLimiterFactory` -> type-hint `RateLimiterFactoryInterface`.
+- 8.1 deprecates the selection of a limiter by argument name only (`RateLimiterFactoryInterface $anonymousApiLimiter`) -> `#[Target('anonymous_api')] RateLimiterFactoryInterface $limiter`.
+- 8.0 removes the XML config format and the `Symfony\Config` builder classes (`FrameworkConfig`, `$framework->rateLimiter()`) -> write `framework.rate_limiter` in YAML or in a PHP `App::config([...])` array.
+
+## Docs
+
+- https://symfony.com/doc/current/rate_limiter.html
+- https://symfony.com/doc/current/reference/configuration/framework.html
+- https://symfony.com/doc/current/security.html
+- https://symfony.com/doc/current/reference/configuration/security.html
+- https://symfony.com/doc/current/http_client.html
+- https://symfony.com/doc/current/messenger.html

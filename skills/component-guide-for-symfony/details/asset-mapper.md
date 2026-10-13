@@ -1,0 +1,73 @@
+# AssetMapper (`symfony/asset-mapper`): details
+
+**Applies to:** Symfony 8.1
+
+## Key features and concepts
+
+- Asset paths and logical paths: AssetMapper exposes all files in its asset paths. The Flex recipe sets one asset path: `assets/`. A file has a logical path relative to its asset path, for example `images/duck.png`. The framework also maps the `Resources/public/` or `public/` directory of each bundle under `bundles/<name>/`. To override a bundle asset, create a file with the same logical path in `assets/`. AssetMapper never publishes `.php` files and excludes dotfiles by default. `framework.asset_mapper.paths`, `excluded_patterns`, `exclude_dotfiles`, `debug:asset-map`
+- Versioned URLs: `asset('images/duck.png')` returns a URL such as `/assets/images/duck-<hash>.png`. The 7-character hash comes from the file content, so a changed file gets a new URL. `asset()` and `importmap()` add the subdirectory of the application, or the CDN of `framework.assets.base_urls`, to the URL. Twig `asset()`, `AssetMapperInterface::getPublicPath()`
+- Importmap and entrypoints: `importmap.php` maps import names to local files (`path`) or to downloaded packages (`version`). An entrypoint is an entry with `'entrypoint' => true` that you pass to `importmap()`. If a file imports a relative path such as `./duck.js`, AssetMapper adds the importmap entry automatically. A bare import such as `bootstrap` needs an entry in `importmap.php`. Write the `.js` extension in relative imports. For page-specific JavaScript or CSS, add a second entrypoint, for example `checkout`. Then override the `importmap` block of that page with `importmap(['app', 'checkout'])`, without `parent()`, because a page can have only one importmap. `importmap.php`, Twig `importmap()`
+- Third-party packages: `importmap:require` finds a package and its dependencies on the jsDelivr CDN. It writes the exact version to `importmap.php` and downloads the files into `assets/vendor/`. The Flex recipe adds `assets/vendor/` to `.gitignore`. On another computer, run `importmap:install` to download the missing files. The command accepts a version constraint (`"lodash@^4.15"`), a file of a package (`chart.js/auto`) and an alias (`"vue/dist/vue.esm-bundler.js=vue"`). For a package in `node_modules/`, add its directory to `paths` and use `--path` with a logical path. An import does not create a global variable, for example the `$` of jQuery. Import the package in each file that uses it. If you need a global variable, set it in `app.js`, for example `window.$ = $;`. `importmap:require`, `importmap:install`, `importmap:remove`
+- Updates and audits: `importmap:outdated` reads the npm registry and exits with code 1 if updates exist. `importmap:update` installs the latest version of all packages, or of the named packages. `importmap.php` does not keep version constraints, so the update can install a new major version. `importmap:audit` checks the GitHub advisory database and exits with code 1 if it finds a vulnerability. Both check commands accept `--format=json`. `importmap:outdated`, `importmap:update`, `importmap:audit`
+- CSS: import CSS from JavaScript, for example `import './styles/app.css';`. Then `importmap()` renders a `<link rel="stylesheet">` tag for each CSS file that the entrypoints import. A dynamic `import('./lazy.css')` loads the CSS later. AssetMapper changes the `url()` and `@import` paths in CSS files to versioned URLs. `importmap:require bootstrap/dist/css/bootstrap.min.css` adds the CSS file of a package.
+- JSON: `import usersPromise from './users.json';` gives a Promise of the parsed JSON content. The JSON file gets a versioned URL like the other assets. Use a plain `import`, without `with { type: 'json' }`.
+- Preload links: `importmap()` adds a `<link rel="modulepreload">` tag for each JavaScript module that the entrypoints import statically. If `symfony/web-link` is installed, it also adds `Link` headers with `rel=preload` for the imported CSS and JSON files. The browser then downloads the import chain in parallel. A dynamic `import()` is not preloaded. Twig `importmap()`
+- Dev server and compilation: in debug mode, a kernel listener serves the `/assets/` URLs from the source files. Before deployment, `asset-map:compile` writes the versioned files to `public/assets/`, and the web server sends them directly. Because the file names change with the content, set a long `Cache-Control` `max-age` for them, for example one year. The command also writes `manifest.json`, `importmap.json` and one `entrypoint.<name>.json` file per entrypoint. If `manifest.json` exists, AssetMapper uses the compiled files. So, if you compile on a development machine, delete the contents of `public/assets/` to see your changes again. `framework.asset_mapper.server`, `asset-map:compile`
+- Pre-compression: if `framework.asset_mapper.precompress` is enabled, `asset-map:compile` also compresses each file whose extension is in `precompress.extensions`. Each compressed copy gets `.br`, `.zst` or `.gz` at the end of its name. By default, AssetMapper uses all formats that the system supports. Each format needs its PHP extension, or its CLI tool and `symfony/process`. Configure your web server to send these files. `assets:compress` and `CompressorInterface` compress other files, for example uploads. `precompress.formats`, `precompress.extensions`
+- Content Security Policy: pass attributes in the second argument of `importmap()`, for example `importmap('app', {'nonce': csp_nonce('script')})` with NelmioSecurityBundle. The attributes go on all `<script>` tags that `importmap()` renders. CSS and JSON entries use `data:` URLs, so add `'strict-dynamic'` to `script-src`. Then the browser ignores other `script-src` sources such as `'self'`, so every other `<script>` tag also needs the nonce. For fixed attributes such as `crossorigin`, use `importmap_script_attributes`.
+- Polyfill: for browsers without importmap support, `importmap()` loads `es-module-shims`. If the package is not in `importmap.php`, it loads the file from a CDN with an integrity hash. To serve the polyfill locally, run `importmap:require es-module-shims`. To remove it, set `importmap_polyfill: false`. `framework.asset_mapper.importmap_polyfill`
+- Missing imports: `missing_import_mode` controls imports of files that do not exist. `strict` throws an exception, `warn` logs a warning on the `asset_mapper` channel and `ignore` leaves the import as it is. The default is `warn`. The Flex recipe sets `strict`, and `warn` in the `prod` environment. `framework.asset_mapper.missing_import_mode`
+- Extension points: implement `AssetCompilerInterface` to change the content of assets; autoconfiguration adds the `asset_mapper.compiler` tag. Listen to `PreAssetsCompileEvent` to run a task before `asset-map:compile`. To write the compiled files to another place, for example S3, replace the `asset_mapper.local_public_assets_filesystem` service with a `PublicAssetsFilesystemInterface` implementation. A bundle prepends `framework.asset_mapper.paths` to expose its assets.
+- Limits and third-party bundles: AssetMapper does not combine or minify files. The docs name `symfonycasts/tailwind-bundle` (Tailwind CSS), `symfonycasts/sass-bundle` (Sass), `sensiolabs/typescript-bundle` (TypeScript), `sensiolabs/minify-bundle` (minification) and `kocal/biome-js-bundle` (lint and format). Vue single-file components (`.vue`) do not work. If you write many JSX files, or must support browsers that have no ES6 support, the docs advise Encore.
+
+## Entry points
+
+- Twig function `importmap(entryPoint = 'app', attributes = {})` from `Symfony\Bridge\Twig\Extension\ImportMapExtension` (`symfony/twig-bridge`): renders the importmap, the stylesheet and preload links, the polyfill loader and the `<script type="module">` tag of the entrypoints. The first argument also accepts an array of entrypoint names.
+- Twig function `asset()`: returns the versioned URL of a logical path. AssetMapper decorates the default asset package with `Symfony\Component\AssetMapper\MapperAwareAssetPackage`.
+- File `importmap.php`: one entry per import name, with the keys `path`, `version`, `type` (`js`, `css` or `json`), `entrypoint` and `package_specifier`.
+- Config key `framework.asset_mapper`: `paths`, `excluded_patterns`, `exclude_dotfiles`, `server`, `public_prefix`, `missing_import_mode`, `extensions`, `importmap_path`, `importmap_polyfill`, `importmap_script_attributes`, `vendor_dir`, `precompress` (`enabled`, `formats`, `extensions`).
+- Console commands: `importmap:require`, `importmap:install`, `importmap:remove`, `importmap:update`, `importmap:outdated`, `importmap:audit`, `asset-map:compile`, `debug:asset-map` (`--ext`, `--vendor`, `--no-vendor`, `--full`), `assets:compress`.
+- Autowire `Symfony\Component\AssetMapper\AssetMapperInterface`: `getAsset()`, `getPublicPath()`, `allAssets()`, `getAssetFromSourcePath()`. `getAsset()` returns a `Symfony\Component\AssetMapper\MappedAsset` with `logicalPath`, `publicPath` and `sourcePath`.
+- Autowire `Symfony\Component\AssetMapper\ImportMap\ImportMapManager` to change `importmap.php` from PHP code. `require()` takes `Symfony\Component\AssetMapper\ImportMap\PackageRequireOptions` objects, `remove()` takes import names, and `update()` takes import names or no argument (all packages).
+- Autowire `Symfony\Component\AssetMapper\Compressor\CompressorInterface`: `compress($path)` writes the compressed files next to the file.
+- Extension points: `Symfony\Component\AssetMapper\Compiler\AssetCompilerInterface` (tag `asset_mapper.compiler`), `Symfony\Component\AssetMapper\Event\PreAssetsCompileEvent`, `Symfony\Component\AssetMapper\Path\PublicAssetsFilesystemInterface` (service ID `asset_mapper.local_public_assets_filesystem`).
+- Logs: the `asset_mapper` Monolog channel (autowire `#[Target('asset_mapper')] Psr\Log\LoggerInterface $logger`; Symfony 8.1 deprecates the match by the argument name only).
+- Installation: `composer require symfony/asset-mapper symfony/asset symfony/twig-pack`. The Flex recipe creates `assets/app.js`, `assets/styles/app.css`, `config/packages/asset_mapper.yaml` and `importmap.php`. It also adds `{% block importmap %}{{ importmap('app') }}{% endblock %}` to `templates/base.html.twig`.
+
+## Symbiotic packages
+
+- [Asset](../packages/asset.md): AssetMapper decorates the default asset package, so `asset()` returns the versioned URL of a logical path; the docs install both packages together.
+- [Twig Bridge](../packages/twig-bridge.md): the bridge defines the `importmap()` and `asset()` Twig functions; `ImportMapRuntime` calls the AssetMapper `ImportMapRenderer`.
+- [TwigBundle](../packages/twig-bundle.md): TwigBundle registers the `importmap()` function if `symfony/asset-mapper` is installed and enabled.
+- [FrameworkBundle](../packages/framework-bundle.md): FrameworkBundle reads `framework.asset_mapper`, maps the public directory of each bundle and registers the services and the console commands.
+- [HttpClient](../packages/http-client.md): the `importmap:*` commands find, download and audit packages and check for updates through the `http_client` service, so `framework.http_client` must stay enabled.
+- [WebLink](../packages/web-link.md): if WebLink is installed, `importmap()` adds `Link` preload headers for CSS and JSON files; `AssetMapperInterface` gives the versioned URL for `sendEarlyHints()`.
+- [StimulusBundle](../packages/stimulus-bundle.md): with AssetMapper, the `@symfony/stimulus-bundle` importmap entry loads the controllers of `assets/controllers/` and `assets/controllers.json` through a generated loader.
+- [Symfony UX Turbo](../packages/ux-turbo.md): with AssetMapper, UX Turbo adds `data-turbo-track="reload"` to the importmap script tags, so Turbo reloads the page after an asset changes.
+- [Symfony UX React](../packages/ux-react.md): UX React works with AssetMapper only if you compile the `.jsx` files to `.js` files first.
+- [Symfony UX Vue.js](../packages/ux-vue.md): UX Vue works with AssetMapper only without `.vue` single-file components.
+- [UX Icons](../packages/ux-icons.md): UX Icons warms its icon cache when `asset-map:compile` runs, through `PreAssetsCompileEvent`.
+- [WebpackEncoreBundle](../packages/webpack-encore-bundle.md): often confused with AssetMapper; the docs call Encore the legacy bundler option and keep it for projects that use it already.
+- [Symfony Reprise](../packages/reprise.md): if a new project needs a bundler, use Reprise (Vite or Rsbuild) instead of AssetMapper. Reprise 1.x is stable (1.0.0, 2026-08-26). The Symfony docs call it experimental.
+- [Panther](../packages/panther.md): before end-to-end tests with Panther, run `asset-map:compile`, because the built-in PHP server of Panther returns 404 for dev-server assets.
+- [MonologBundle](../packages/monolog-bundle.md): MonologBundle shows the missing-import warnings of the `asset_mapper` channel, for example in the output of `debug:asset-map`.
+- [Process](../packages/process.md): pre-compression needs Process to run the `brotli`, `zstd`, `zopfli` or `gzip` command, for example if a PHP extension is missing.
+- [Symfony Flex](../packages/flex.md): the recipe creates the start files, adds `public/assets/` and `assets/vendor/` to `.gitignore` and adds `importmap:install` to the Composer `auto-scripts`.
+
+## Changed in 8.0/8.1
+
+- Removed in 8.0: `ImportMapConfigReader::splitPackageNameAndFilePath()` -> `ImportMapEntry::splitPackageNameAndFilePath()`.
+- Changed in 8.0: the `$projectDir` argument of the `ImportMapRequireCommand` constructor is required. Pass it if you create the command yourself.
+- New in 7.4 and 8.0: `import data from './data.json';` loads a JSON file and gives a Promise of its content. Use it instead of `fetch()` for JSON files of the application.
+- Removed in 8.0: XML configuration and the fluent PHP configuration format. Do not write `$framework->assetMapper()->path('assets/', null)`. Use YAML, or return `App::config(['framework' => ['asset_mapper' => ['paths' => ['assets/']]]])` from a PHP file in the namespace `Symfony\Component\DependencyInjection\Loader\Configurator`. The `asset_mapper` section of the framework reference shows both old formats.
+
+## Docs
+
+- https://symfony.com/doc/current/frontend/asset_mapper.html
+- https://symfony.com/doc/current/frontend.html
+- https://symfony.com/doc/current/reference/configuration/framework.html
+- https://symfony.com/doc/current/web_link.html
+- https://symfony.com/doc/current/reference/twig_reference.html
+- https://symfony.com/doc/current/frontend/create_ux_bundle.html
+- https://symfony.com/doc/current/testing/end_to_end.html
+- https://symfony.com/doc/current/best_practices.html

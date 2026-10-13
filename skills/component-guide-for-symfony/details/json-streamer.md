@@ -1,0 +1,66 @@
+# JsonStreamer (`symfony/json-streamer`): details
+
+**Applies to:** Symfony 8.1
+
+## Key features and concepts
+
+- **Stream writer:** `write($data, $type, $options)` returns a `\Traversable&\Stringable` object. Iterate it to get the JSON in chunks, or cast it to a string. If a collection holds only scalar values, the writer calls `json_encode()` on the full value. In this case, give an array, because a generator becomes `{}`. Entry point: `JsonStreamWriter::write()` (`StreamWriterInterface`).
+- **Stream reader:** `read($input, $type, $options)` accepts a stream resource, for example from `fopen()`, or a JSON string. It returns the PHP data of the given type. Entry point: `JsonStreamReader::read()` (`StreamReaderInterface`).
+- **TypeInfo types:** each call needs a TypeInfo `Type` that describes the data, for example `Type::list(Type::object(Cat::class))`. JsonStreamer generates PHP code for each type, writes it to a file and uses this file again in later calls. Entry point: `Symfony\Component\TypeInfo\Type`.
+- **JSON arrays and JSON objects:** the key type of a collection sets the JSON shape. An `int` key type gives a JSON array, and other key types give a JSON object. `Type::list()` has `int` keys. `Type::iterable($value)` and `Type::array($value)` have `int|string` keys, so they give a JSON object. If you read a JSON array from a stream, give an `int` key type, or the reader throws an `UnexpectedValueException`. With `Type::list()`, `Type::dict()` or `Type::array()`, the reader returns an array. With `Type::iterable()`, it returns a generator, except for a string input of scalar values. Entry point: `Type::iterable(Type::object(Cat::class), Type::int())` for a JSON array.
+- **Lazy reading:** if the input is a stream resource, the reader creates lazy ghost objects. A ghost decodes its part of the JSON when you first use one of its properties. A generator from `Type::iterable()` reads one item at a time. If the input is a string, the reader decodes all of it at once with `json_decode()`. The docs recommend a string for small and medium JSON, because it is faster. Entry point: `$reader->read(fopen($path, 'r'), $type)`.
+- **Supported classes:** JsonStreamer reads and writes public properties only. Use classes without a constructor, as the docs specify. The string reader calls `new $className()`, so a required constructor argument causes an `ArgumentCountError`. The stream reader creates a ghost and calls no constructor. The reader ignores unknown JSON keys. With a string input, a JSON `null` value counts as a missing key, so the property keeps its default value or stays uninitialized. Entry point: a DTO with public typed properties.
+- **Unsupported types:** intersection types and enums without a backing type cause an `UnsupportedException`. In a union of object types, every object type matches any JSON object, so the reader cannot select a subclass from the data. JsonStreamer has no discriminator map. Entry point: `Symfony\Component\JsonStreamer\Exception\UnsupportedException`.
+- **Cache warmup:** `#[JsonStreamable]` marks a class for code generation during `cache:warmup`. The optional cache warmer generates the writer and the two readers for `Type::object()` (`asObject`) and for `Type::list(Type::object())` (`asList`). Both options are `true` by default. Put the class in a directory that `config/services.yaml` loads, for example `src/`, and not in an `exclude` path. Without the attribute, the first call for a type generates its code. Entry point: `#[JsonStreamable(asObject: true, asList: true)]`.
+- **Generated files:** in an application, the generated files are in `%kernel.cache_dir%/json_streamer/`. In debug mode, the framework generates a file again when a related class changes. In standalone use, the default directories are `sys_get_temp_dir().'/json_streamer/write'` and `sys_get_temp_dir().'/json_streamer/read'`. The standalone services write a file only when it does not exist. Thus, after you change a class in standalone use, delete the old files. Entry point: the directory argument of `JsonStreamWriter::create()` and `JsonStreamReader::create()`.
+- **JSON key names:** `#[StreamedName('@id')]` sets the JSON key of a property. Entry point: `Symfony\Component\JsonStreamer\Attribute\StreamedName`.
+- **Property value transformers:** `#[ValueTransformer]` converts the value of one property. `nativeToStream` applies when you write, and `streamToNative` applies when you read. The value is a public static method, a named function or a service ID. The service implements `PropertyValueTransformerInterface`, and its `getStreamValueType()` gives the JSON type. An anonymous function causes a `RuntimeException`. With a string input, a `streamToNative` transformer also gets the string `'_symfony_missing_value'` for a missing key or a `null` value. If the JSON key can be missing or `null`, type the first parameter of a `streamToNative` callable as `mixed`. Entry point: `Symfony\Component\JsonStreamer\Attribute\ValueTransformer`.
+- **Value object transformers (8.1):** a service that implements `ValueObjectTransformerInterface` converts all objects of one class, for example `Money`, to one scalar JSON value and back. Subclasses and implementations of that class use the same transformer. When you read, the property type must accept the object that `reverseTransform()` returns. Built-in transformers handle `\DateTimeInterface` (RFC 3339 by default), `\DateInterval` and `\DateTimeZone`. The date transformer always reads a `\DateTimeImmutable`. Thus, type date properties as `\DateTimeImmutable` or `\DateTimeInterface`, not as `\DateTime`. Entry point: `Symfony\Component\JsonStreamer\Transformer\ValueObjectTransformerInterface`.
+- **Options:** `include_null_properties` is `false` by default, so the writer omits `null` properties. Other options are `date_time_format`, `date_time_timezone` (8.1) and `date_interval_format` (8.1). Your own option keys reach the transformers in `$options`. Set application defaults in `framework.json_streamer.default_options` (8.1). Entry point: the `$options` argument of `write()` and `read()`.
+- **Property metadata loaders:** to change names, types or transformers for many classes, decorate `json_streamer.write.property_metadata_loader` or `json_streamer.read.property_metadata_loader`. Give the decorator a negative priority, for example `#[AsDecorator('json_streamer.write.property_metadata_loader', priority: -1)]`, so that it gets the result of the built-in loaders. `PropertyMetadata::createSynthetic()` adds a computed property, and only the writer uses it. At the default priority, the built-in attribute loader removes this property. Its transformer gets the object in `$options['_current_object']`. Entry point: `Symfony\Component\JsonStreamer\Mapping\PropertyMetadataLoaderInterface`.
+- **Generic types:** if `phpstan/phpdoc-parser` is installed, JsonStreamer reads PHPDoc types such as `@template` and `list<T>`. Give the concrete type in the call. Entry point: `Type::generic(Type::object(Shelter::class), Type::object(Cat::class))`.
+
+## Entry points
+
+- Install: `composer require symfony/json-streamer`. FrameworkBundle then enables `framework.json_streamer`.
+- Keep `framework.type_info` enabled. If TypeInfo is disabled or missing, the container build fails with a `LogicException`.
+- Autowire `Symfony\Component\JsonStreamer\JsonStreamWriter` (service `json_streamer.stream_writer`).
+- Autowire `Symfony\Component\JsonStreamer\JsonStreamReader` (service `json_streamer.stream_reader`).
+- To type an argument as `Symfony\Component\JsonStreamer\StreamWriterInterface` or `Symfony\Component\JsonStreamer\StreamReaderInterface`, add `#[Autowire(service: 'json_streamer.stream_writer')]` or `#[Autowire(service: 'json_streamer.stream_reader')]`. The interfaces have no autowiring alias, so you cannot autowire them by type alone or with `#[Target]`.
+- Without FrameworkBundle: `JsonStreamWriter::create($transformers, $streamWritersDir)` and `JsonStreamReader::create($transformers, $streamReadersDir)`. Key a value object transformer by the value object class name. Key a property value transformer by the ID in `#[ValueTransformer]`.
+- Attributes: `Symfony\Component\JsonStreamer\Attribute\JsonStreamable`, `Symfony\Component\JsonStreamer\Attribute\StreamedName` and `Symfony\Component\JsonStreamer\Attribute\ValueTransformer`.
+- Interfaces to implement: `Symfony\Component\JsonStreamer\Transformer\PropertyValueTransformerInterface`, `Symfony\Component\JsonStreamer\Transformer\ValueObjectTransformerInterface` and `Symfony\Component\JsonStreamer\Mapping\PropertyMetadataLoaderInterface`.
+- Config: `framework.json_streamer.enabled`, `framework.json_streamer.default_options` (8.1) and `framework.json_streamer.default_options.include_null_properties`.
+- Service tags: autoconfiguration adds `json_streamer.property_value_transformer` and `json_streamer.value_object_transformer`. `#[JsonStreamable]` adds `json_streamer.streamable`.
+- Services to decorate, with a negative priority: `json_streamer.write.property_metadata_loader` and `json_streamer.read.property_metadata_loader`.
+- Console commands: `cache:warmup` and `cache:clear` generate the code for the `#[JsonStreamable]` classes. The `--no-optional-warmers` option skips this step.
+- Exceptions: all exceptions implement `Symfony\Component\JsonStreamer\Exception\ExceptionInterface`. Invalid JSON causes `UnexpectedValueException`. With a string input, a value that PHP cannot assign to the property also causes `UnexpectedValueException`. A value that `json_encode()` cannot encode causes `NotEncodableValueException`.
+- TypeInfo factories: `Type::object()`, `Type::list()`, `Type::dict()`, `Type::iterable()`, `Type::nullable()`, `Type::enum()` and `Type::generic()` (`Symfony\Component\TypeInfo\Type`).
+
+## Symbiotic packages
+
+- [Serializer](../packages/serializer.md): Often confused: the Serializer handles more formats, groups, constructor arguments and `#[DiscriminatorMap]`, and `#[MapRequestPayload]` uses it; JsonStreamer handles large JSON with simple DTOs.
+- [TypeInfo](../packages/type-info.md): JsonStreamer requires TypeInfo, because each `write()` and `read()` call takes a `Type` and the `type_info.resolver` service gives the property types.
+- [FrameworkBundle](../packages/framework-bundle.md): FrameworkBundle registers the writer and reader services, the `framework.json_streamer` options, the autoconfiguration and the optional cache warmer.
+- [HttpFoundation](../packages/http-foundation.md): `StreamedResponse` sends the chunks of `write()` to the client, and `StreamedJsonResponse` streams untyped arrays from a generator without a `Type`.
+- [JsonPath](../packages/json-path.md): JsonPath uses the JsonStreamer `Splitter` to query a JSON stream resource; without JsonStreamer, such a query throws a `LogicException`.
+- [DependencyInjection](../packages/dependency-injection.md): `#[Autowire(service: ...)]` injects the writer or the reader into an interface-typed argument, and `#[AsDecorator]` decorates a property metadata loader.
+- [HttpKernel](../packages/http-kernel.md): the JsonStreamer cache warmer implements the HttpKernel `CacheWarmerInterface`, so the kernel cache warmup generates the code.
+
+## Changed in 8.0/8.1
+
+- 8.1, new: value objects. Implement `ValueObjectTransformerInterface` to write a class such as `Money` as one scalar JSON value. Autoconfiguration adds the `json_streamer.value_object_transformer` tag.
+- 8.1, deprecated: `Symfony\Component\JsonStreamer\ValueTransformer\ValueTransformerInterface` -> `Symfony\Component\JsonStreamer\Transformer\PropertyValueTransformerInterface`, and the tag `json_streamer.value_transformer` -> `json_streamer.property_value_transformer`.
+- 8.1, deprecated: `DateTimeToStringValueTransformer`, `StringToDateTimeValueTransformer` and their `json_streamer.value_transformer.*` services -> the built-in `DateTimeValueObjectTransformer`, which needs no attribute.
+- 8.1, new: the `date_time_timezone` option, and built-in support for `\DateInterval` (option `date_interval_format`) and `\DateTimeZone` properties.
+- 8.1, new: `framework.json_streamer.default_options` sets default options for all calls. The `JsonStreamWriter` and `JsonStreamReader` constructors have the new `$defaultOptions` argument.
+- 8.0, removed: `PropertyMetadata::getNativeToStreamValueTransformer()` and `getStreamToNativeValueTransformers()` -> `getValueTransformers()`. `withNativeToStreamValueTransformers()` and `withStreamToNativeValueTransformers()` -> `withValueTransformers()`. `withAdditionalNativeToStreamValueTransformer()` and `withAdditionalStreamToNativeValueTransformer()` -> `withAdditionalValueTransformer()`.
+
+## Docs
+
+- https://symfony.com/doc/current/serializer/streaming_json.html
+- https://symfony.com/doc/current/serializer.html (section "Serializing JSON Using Streams": Serializer or JsonStreamer)
+- https://symfony.com/doc/current/reference/configuration/framework.html (`json_streamer`)
+- https://symfony.com/doc/current/reference/attributes.html
+- https://symfony.com/doc/current/components/type_info.html
+- https://symfony.com/doc/current/components/http_foundation.html (`StreamedResponse`, `StreamedJsonResponse`)

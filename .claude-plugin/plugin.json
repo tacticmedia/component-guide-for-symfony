@@ -1,0 +1,13 @@
+{
+    "name": "component-guide-for-symfony",
+    "displayName": "An unofficial guide through Symfony Components",
+    "version": "1.0.0",
+    "description": "Tells Claude which Symfony package already covers a need, gives the Symfony 8.1, UX 3.5 and AI 0.14 rules that replace older examples, and audits a project for hand-written code that a package covers. Not affiliated with or endorsed by Symfony SAS.",
+    "author": {
+        "name": "Jan Klan"
+    },
+    "homepage": "https://github.com/tacticmedia/component-guide-for-symfony",
+    "repository": "https://github.com/tacticmedia/component-guide-for-symfony",
+    "license": "CC-BY-SA-4.0 AND MIT",
+    "keywords": ["symfony", "php", "refactoring", "audit", "agent-skills"]
+}

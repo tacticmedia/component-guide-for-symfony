@@ -1,0 +1,85 @@
+# Mime (`symfony/mime`): details
+
+**Applies to:** Symfony 8.1
+
+## Key features and concepts
+
+- **Email builder.** `Email` has fluent methods for the headers and the bodies: `from()`, `to()`, `cc()`, `bcc()`, `replyTo()`, `subject()`, `priority()`, `text()` and `html()`. The address methods replace the current addresses. `addTo()`, `addCc()`, `addBcc()`, `addFrom()` and `addReplyTo()` add addresses. `text()` and `html()` accept a string or a PHP stream resource. An email must have a text body, an HTML body or an attachment. When Mime writes the email, it adds the `Date`, `Message-ID` and `MIME-Version` headers if they are missing. Entry point: `Symfony\Component\Mime\Email`.
+- **Addresses.** The address methods accept strings and `Address` objects. `new Address('fabien@example.com', 'Fabien')` adds a display name. `Address::create('Fabien <fabien@example.com>')` parses the `Name <address>` format. The constructor validates the address with `egulias/email-validator` and throws `RfcComplianceException` if the address is not valid. It throws `InvalidArgumentException` if the address contains a control character, such as a line break. `Address` accepts non-ASCII characters in the local part and in the domain. Mailer rejects a non-ASCII local part in the envelope sender. `Address::fromString()` does not exist. Use `Address::create()`. Entry point: `Symfony\Component\Mime\Address`.
+- **Custom headers.** `$email->getHeaders()` returns the `Headers` collection. Use `addTextHeader()` for most headers. Use `addIdHeader()` with an array for `References` or `In-Reply-To`. Other methods add date, mailbox, path and parameterized headers. If you add a unique header that already exists, such as `Subject`, `Headers` throws a `LogicException`. Entry point: `Symfony\Component\Mime\Header\Headers`.
+- **Attachments.** `attachFromPath($path, $name, $contentType)` and `attach($streamOrString, $name, $contentType)` add an attachment. They are shortcuts for `addPart(new DataPart(...))`. A `File` body loads the file only when Mime writes the message. If you give no content type, Mime takes it from the extension of a `File` body. Otherwise, the content type is `application/octet-stream`. If you give no name to a `File` attachment, it gets the file name. `Email::attachPart()` does not exist. Use `addPart()`. Entry point: `Symfony\Component\Mime\Part\DataPart`.
+- **Inline images.** `embedFromPath('/path/to/logo.png', 'logo')` adds an inline part, and `<img src="cid:logo">` in the HTML body refers to it. `addPart((new DataPart($body, 'logo', 'image/png'))->asInline())` does the same. Mime finds `cid:` references in `<img src>` attributes and in `background` attributes. When it writes the email, it replaces each reference that matches a part name with the Content-ID of that part. It then puts the bodies and the referenced parts into a `multipart/related` part. To set the Content-ID yourself, call `setContentId()` with a value that contains `@`. In a `TemplatedEmail` template, `email.image('@images/logo.png')` embeds the image and returns its `cid:` URL. Entry point: `Symfony\Component\Mime\Part\DataPart::asInline()`.
+- **Low-level messages.** `Email` creates the MIME tree: `multipart/alternative` for the text and HTML bodies, `multipart/related` for inline images and `multipart/mixed` for attachments. For full control, build a `Message` from `Headers` and parts such as `TextPart`, `AlternativePart`, `RelatedPart`, `MixedPart` and `DataPart`. For example, a `TextPart` with the subtype `calendar; method=REQUEST` adds an iCalendar invitation to an `AlternativePart`. `MessageConverter::toEmail()` converts a `Message` to an `Email`, and it throws a `RuntimeException` if the body structure is too complex. Entry point: `Symfony\Component\Mime\Message`.
+- **Draft emails.** `DraftEmail` adds the `X-Unsent: 1` header and does not require the `From`, `Date` or `Message-ID` headers. Return `$draft->toString()` as a `message/rfc822` download with the `.eml` extension. Many email clients open such a file as a draft. Mailer cannot send a `DraftEmail`, because `ensureValidity()` throws a `LogicException`. Entry point: `Symfony\Component\Mime\DraftEmail`.
+- **MIME types and extensions.** `getExtensions('image/jpeg')` returns the extensions of a MIME type, and `getMimeTypes('jpg')` returns the MIME types of an extension. The first array element is the preferred value. `getExtensions('image/jpeg')` returns `['jpg', 'jpeg', 'jpe', 'jfif']`. The docs show an older list. The built-in map comes from jshttp/mime-db and freedesktop shared-mime-info. In an application, autowire `MimeTypesInterface`. In other code, use `new MimeTypes()` or `MimeTypes::getDefault()`. Entry point: `Symfony\Component\Mime\MimeTypesInterface`.
+- **MIME type guessing.** `guessMimeType($path)` reads the file contents and ignores the file name. It uses the PHP `fileinfo` extension and the `file` command. If no guesser is available, it throws a `LogicException`. If the file does not exist or is not readable, it throws an `InvalidArgumentException`. For a custom guesser, implement `MimeTypeGuesserInterface`. Autoconfiguration adds the `mime.mime_type_guesser` tag, and a compiler pass adds the guesser to the `mime_types` service. The last registered guesser runs first, so your guessers run before the built-in guessers. FrameworkBundle also makes `mime_types` the `MimeTypes::getDefault()` instance, so HttpFoundation and Validator use your guessers. Entry point: `Symfony\Component\Mime\MimeTypeGuesserInterface`.
+- **DKIM signatures.** `new DkimSigner($key, 'example.com', 's1')` takes a PEM key string or a `file://` path, the domain and the DNS selector. `sign($message, $options)` returns a new signed `Message`. `DkimOptions` sets the canonicalization, the headers to ignore, the body length and the signature expiration. Only `rsa-sha256` works: `DkimSigner::ALGO_ED25519` exists, but `sign()` throws a `RuntimeException` for it. To sign all emails, configure `framework.mailer.dkim_signer`. Entry point: `Symfony\Component\Mime\Crypto\DkimSigner`.
+- **S/MIME signatures.** `new SMimeSigner($certificatePath, $privateKeyPath)` takes file paths without the `file://` prefix. `sign()` returns a new `multipart/signed` `Message`. Optional arguments set the key passphrase, a file with extra certificates and the `openssl_pkcs7_sign()` flags (default `PKCS7_DETACHED`). To sign all emails, configure `framework.mailer.smime_signer`. Entry point: `Symfony\Component\Mime\Crypto\SMimeSigner`.
+- **S/MIME encryption.** `new SMimeEncrypter($certificatePath)` encrypts the whole message, with its attachments, as `application/pkcs7-mime`. With an array of certificate paths, Mime encrypts each message for all the certificates; it does not select a certificate by the `To` address. The default cipher is `OPENSSL_CIPHER_AES_256_CBC`. To encrypt emails globally, configure `framework.mailer.smime_encrypter`. Then add an `X-SMime-Encrypt` header to each email that you want to encrypt. Mailer gets the recipient certificates from your `SmimeCertificateRepositoryInterface` service. If a recipient has no certificate, Mailer sends the email unencrypted. Entry point: `Symfony\Component\Mime\Crypto\SMimeEncrypter`.
+- **Signing order and limits.** Sign or encrypt an email only after its body is complete. A Mailer listener renders the body of a `TemplatedEmail` before delivery. Thus, sign a templated email in a `MessageEvent` listener with a negative priority, or use the global configuration (priority -128). `DkimSigner::sign()` removes the `Bcc` header, so an email that you sign before `send()` does not reach its `Bcc` addresses. The global `dkim_signer` listener signs after Mailer creates the envelope, so the SMTP transport still sends the email to the `Bcc` addresses. Entry point: `Symfony\Component\Mailer\Event\MessageEvent`.
+- **HTML-to-text conversion.** If a `TemplatedEmail` has an HTML template and no text body, the Twig body renderer creates the text body from the HTML body. It uses the `twig.mailer.html_to_text_converter` service if you configure one. Otherwise, it uses `LeagueHtmlToMarkdownConverter` if `league/html-to-markdown` is installed, else `DefaultHtmlToTextConverter`, which calls `strip_tags()`. A plain `Email` gets no automatic text body. To write your own converter, implement `HtmlToTextConverterInterface`. Entry point: `Symfony\Component\Mime\HtmlToTextConverter\HtmlToTextConverterInterface`.
+- **Form data bodies.** `new FormDataPart(['name' => 'Jane', 'photo' => DataPart::fromPath($path)])` builds a `multipart/form-data` body. Nested arrays produce field names such as `field[0]`. To repeat one field name, pass a list of single-element arrays. For HttpClient, pass `bodyToIterable()` or `bodyToString()` as `body`, and `getPreparedHeaders()->toArray()` as `headers`. Use `bodyToString()` if the server requires a `Content-Length` header. Entry point: `Symfony\Component\Mime\Part\Multipart\FormDataPart`.
+
+## Entry points
+
+- `Symfony\Component\Mime\Email`: build an email. Send it with Mailer (`Symfony\Component\Mailer\MailerInterface::send()`).
+- `Symfony\Component\Mime\Address`: one address with an optional display name. `Address::create()` parses `Name <address>`.
+- `Symfony\Component\Mime\Part\DataPart` and `Symfony\Component\Mime\Part\File`: attachments and inline parts, with `DataPart::fromPath()`, `asInline()` and `setContentId()`.
+- `Symfony\Component\Mime\Message`, `Symfony\Component\Mime\Header\Headers`, `Symfony\Component\Mime\Part\TextPart`, `Symfony\Component\Mime\Part\Multipart\AlternativePart`, `Symfony\Component\Mime\Part\Multipart\RelatedPart` and `Symfony\Component\Mime\Part\Multipart\MixedPart`: build the MIME tree yourself.
+- `Symfony\Component\Mime\DraftEmail`: a draft email for an `.eml` download.
+- `Symfony\Component\Mime\RawMessage`: a message from a complete string, stream or iterable of strings. Mailer sends it only with an explicit `Symfony\Component\Mailer\Envelope`.
+- `Symfony\Component\Mime\MessageConverter::toEmail()`: convert a `Message` to an `Email`.
+- `Symfony\Component\Mime\Part\Multipart\FormDataPart`: a `multipart/form-data` body.
+- `Symfony\Component\Mime\MimeTypesInterface`: autowire it (service `mime_types`) for `getExtensions()`, `getMimeTypes()` and `guessMimeType()`. Without the container, use `Symfony\Component\Mime\MimeTypes::getDefault()`.
+- Without FrameworkBundle: `new Symfony\Component\Mime\MimeTypes()` or `MimeTypes::getDefault()` for the MIME type map. Create `Email`, `Address`, `DataPart` and the `Crypto` classes with `new`. `Address` then needs `egulias/email-validator`.
+- `Symfony\Component\Mime\MimeTypeGuesserInterface`: implement it for a custom guesser. Autoconfiguration adds the service tag `mime.mime_type_guesser`.
+- `Symfony\Component\Mime\Crypto\DkimSigner`, `Symfony\Component\Mime\Crypto\DkimOptions`, `Symfony\Component\Mime\Crypto\SMimeSigner` and `Symfony\Component\Mime\Crypto\SMimeEncrypter`: sign or encrypt one message.
+- `Symfony\Component\Mime\HtmlToTextConverter\HtmlToTextConverterInterface`, `Symfony\Component\Mime\HtmlToTextConverter\DefaultHtmlToTextConverter` and `Symfony\Component\Mime\HtmlToTextConverter\LeagueHtmlToMarkdownConverter`: convert HTML to text.
+- `Symfony\Component\Mime\BodyRendererInterface`: autowire it to render a `TemplatedEmail` before `send()`. TwigBundle aliases it to the `twig.mime_body_renderer` service.
+- Configuration: `framework.mailer.dkim_signer` (`key`, `domain`, `select`, `passphrase`, `options`), `framework.mailer.smime_signer` (`key`, `certificate`, `passphrase`, `extra_certificates`, `sign_options`), `framework.mailer.smime_encrypter` (`repository`, `cipher`) and `twig.mailer.html_to_text_converter`.
+- Special headers: `X-SMime-Encrypt` (global S/MIME encryption; Mailer removes it) and `X-Unsent` (set by `DraftEmail`).
+- `Symfony\Component\Mailer\EventListener\SmimeCertificateRepositoryInterface`: implement `findCertificatePathFor()` for `framework.mailer.smime_encrypter.repository`.
+- Twig: `email.image()` and `email.attach()` in `TemplatedEmail` templates (Twig Bridge).
+- Test helpers: the PHPUnit constraints `Symfony\Component\Mime\Test\Constraint\EmailSubjectContains`, `EmailTextBodyContains`, `EmailHtmlBodyContains`, `EmailHasHeader`, `EmailHeaderSame`, `EmailAddressContains` and `EmailAttachmentCount`. `Symfony\Bundle\FrameworkBundle\Test\MailerAssertionsTrait` wraps them, for example in `assertEmailSubjectContains()`.
+- Service IDs: `mime_types`, `mailer.dkim_signer`, `mailer.smime_signer`, `mailer.dkim_signer.listener`, `mailer.smime_signer.listener` and `mailer.smime_encrypter.listener`.
+- Console commands: none.
+
+## Symbiotic packages
+
+- [Mailer](../packages/mailer.md): Mailer sends the messages that Mime builds, and its global listeners use the Mime crypto classes. Use Mime to build or sign a message, and use Mailer to send it.
+- [Twig Bridge](../packages/twig-bridge.md): `TemplatedEmail` and `NotificationEmail` extend `Email`, and `BodyRenderer` renders their templates and creates the text body with an `HtmlToTextConverterInterface`.
+- [TwigBundle](../packages/twig-bundle.md): TwigBundle registers the body renderer as `BodyRendererInterface` and defines the `twig.mailer.html_to_text_converter` option.
+- [FrameworkBundle](../packages/framework-bundle.md): FrameworkBundle registers the `mime_types` service, autoconfigures the `mime.mime_type_guesser` tag and defines the `framework.mailer` signer and encrypter options.
+- [HttpFoundation](../packages/http-foundation.md): `File::getMimeType()`, `File::guessExtension()` and `UploadedFile::guessClientExtension()` call `MimeTypes::getDefault()`, and they throw a `LogicException` without Mime.
+- [Validator](../packages/validator.md): The `File` and `Image` constraints guess the MIME type with Mime, and the `extensions` option gets the allowed MIME types from the Mime map.
+- [HttpClient](../packages/http-client.md): HttpClient uses Mime to guess the content type of a local file handle in a `body` array, and it accepts `FormDataPart::bodyToIterable()` as `body` with `getPreparedHeaders()->toArray()` as `headers`.
+- [Serializer](../packages/serializer.md): `MimeMessageNormalizer` normalizes emails, headers, addresses and parts, and `DataUriNormalizer` guesses file MIME types with `MimeTypes::getDefault()`.
+- [Messenger](../packages/messenger.md): `Email` and `Message` objects support PHP `serialize()`, so a Messenger message can carry them to a worker that sends them later.
+- [Console](../packages/console.md): In 8.1, `InputFile::getMimeType()` from a `FileQuestion` uses `MimeTypes::getDefault()` when Mime is installed, else PHP `finfo`.
+- [FrameworkBundle test tools](../packages/framework-bundle-testing.md): `MailerAssertionsTrait` checks the subject, the bodies, the headers, the addresses and the attachments with the constraints in `Symfony\Component\Mime\Test\Constraint`.
+- [Notifier](../packages/notifier.md): The Notifier email channel creates an `Email`, or a `NotificationEmail` if Twig Bridge is installed, and sends it through Mailer.
+- [BrowserKit](../packages/browser-kit.md): `HttpBrowser` needs Mime for all requests except GET and HEAD requests without a `Content-Type`, and it sends a form with files as a `FormDataPart`.
+
+## Changed in 8.0/8.1
+
+- `__sleep()` and `__wakeup()` in a custom `AbstractPart` subclass -> `__serialize()` and `__unserialize()`. Symfony 8.0 replaced the old methods on all `AbstractPart` implementations.
+
+## Status
+
+- DKIM and S/MIME need the PHP OpenSSL extension. Without it, the `DkimSigner`, `SMimeSigner` and `SMimeEncrypter` constructors throw a `LogicException`.
+- `guessMimeType()` needs the PHP `fileinfo` extension or the `file` command. The `file` command guesser does not run on Windows.
+- `Address` needs `egulias/email-validator`. Mailer requires it, but a standalone `symfony/mime` installation does not install it.
+
+## Docs
+
+- https://symfony.com/doc/current/mailer.html (sections "Email Addresses" to "Creating Raw Email Messages", "Text Content", "Embedding Images", "Signing and Encrypting Messages", "Serializing Email Messages" and "Draft Emails")
+- https://symfony.com/doc/current/mime_types.html
+- https://symfony.com/doc/current/reference/configuration/framework.html (options `dkim_signer`, `smime_signer` and `smime_encrypter`)
+- https://symfony.com/doc/current/reference/configuration/twig.html (option `mailer.html_to_text_converter`)
+- https://symfony.com/doc/current/reference/dic_tags.html (tag `mime.mime_type_guesser`)
+- https://symfony.com/doc/current/http_client.html (section "Uploading Data")
+- https://symfony.com/doc/current/testing.html (section "Mailer Assertions")
+- https://symfony.com/doc/current/reference/constraints/File.html (options `extensions` and `mimeTypes`)
+- https://symfony.com/doc/current/controller/upload_file.html (`guessExtension()`)
+- https://symfony.com/doc/current/console/helpers/questionhelper.html (section "Asking for a File")
+- https://github.com/symfony/mime (package README)

@@ -1,0 +1,14 @@
+{
+    "name": "component-guide-for-symfony",
+    "description": "Unofficial Claude Code plugin with a checked catalogue of Symfony packages and an audit for hand-written code that a package covers.",
+    "owner": {
+        "name": "Jan Klan"
+    },
+    "plugins": [
+        {
+            "name": "component-guide-for-symfony",
+            "source": ".",
+            "description": "Which Symfony package covers a need, the Symfony 8.1 rules that replace older examples, and an audit for hand-written code that a package covers."
+        }
+    ]
+}
