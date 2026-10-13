@@ -1,19 +1,43 @@
 # An unofficial guide through Symfony Components
 
 > [!WARNING]  
-> This is an experimental package.
+> This is an experimental package. If you also feel [The Problem](https://github.com/tacticmedia/component-guide-for-symfony#the-problem) and think [The Solution](https://github.com/tacticmedia/component-guide-for-symfony#the-solution) sounds reasonable, please make this part of your workflow, use it, and tell me what you think via [discussion](https://github.com/tacticmedia/component-guide-for-symfony-dev/discussions), [issue](https://github.com/tacticmedia/component-guide-for-symfony-dev/issues) or even a [non-sloppy pull request](https://github.com/tacticmedia/component-guide-for-symfony-dev/pulls).s
 
-**TL;DR:** it's hard to stop your agent from reinventing the wheel. Symfony Components solve many common problems and tasks. This component is trying to teach your agent about why, when and how to use them.  
+## The Problem
+
+The Symfony ecosystem, and also PHP itself, moves faster than what the LLM training data can keep up with. Unknown unknowns bite:
+
+1. It's hard to stop your agent from reinventing the wheel. Symfony Components solve many common problems and tasks.
+2. Your agent might not even know there is a Symfony Component that ahs been solving a particular problem for years
+3. Your agent might not be aware that there is a new way of doing things introduced by a recent update
+
+> [!NOTE]
+> The problem is wider than just "Symfony Components". I actually think we need a context7-style site doing exactly what this package is trying to do, but better, wider: LLM-centric library discovery platform of some sort. Let's leave that out of scope for now, though. 
+
+## The Solution
+
+This guide is trying to teach your agent about why, when and how to use an existing Symfony component instead of re-inventing the wheel.
+
+Symfony has over a hundred of components. How do we tell the agent what to look for without exhausting the entire context? 
+
+My proposal is to try to give the agent enough information in bite-sized pieces, through three layers of detail:
+
+1. The [index SKILL file](https://github.com/tacticmedia/component-guide-for-symfony-dev/blob/main/skills/component-guide-for-symfony/SKILL.md)  file your agent loads every time new code should be added, and existing code should be refactored. It uses this index to get a hint of which components might be able to help with the problem
+2. The [triage file, for example mailer.md](https://github.com/tacticmedia/component-guide-for-symfony-dev/blob/main/skills/component-guide-for-symfony/packages/mailer.md). Gives your agent just enough context for it to decide whether this package could solve the problem
+3. The [guidance file, for example mailer.md](https://github.com/tacticmedia/component-guide-for-symfony-dev/blob/main/skills/component-guide-for-symfony/details/mailer.md) then includes the entire knowledge base, but not the docs. It's meant to teach your agent, at a reasonably high level, what the component does. Now that your agent know the component exists and it looks like it could actually be applied onto the task the agent is trying to solve, it can jump to the specific resources needed to do the real work: Symfony Docs, Context7, related resources, and so on. 
 
 ---
 
+## What's included
+
 Two [Agent Skills](https://agentskills.io) for any coding agent, and a Claude Code plugin that adds a hook and two subagents:
 
-- **component-guide-for-symfony** (skill): before the agent writes PHP code for a common need, it finds the Symfony package that already does the job. It also gives the Symfony 8.1, UX 3.5 and AI 0.14 rules that replace older examples, and the corrections where symfony.com and the source code disagree. It covers 106 packages, checked against their source code.
-- **component-slop-audit-for-symfony** (skill, you start it): reads every file of an existing project, reports hand-written code that a Symfony package covers and removed or deprecated Symfony APIs, and plans each finding that you select.
+- **component-guide-for-symfony** (skill your agent should use when writing new code): before the agent writes PHP code for a common need, it finds the Symfony package that already does the job. It also gives the Symfony 8.1, UX 3.5 and AI 0.14 rules that replace older examples, and the corrections where symfony.com and the source code disagree. It covers 106 packages, checked against their source code.
+- **component-slop-audit-for-symfony** (skill you can use to review an existing codebase ): reads every file of an existing project, reports hand-written code that a Symfony package covers and removed or deprecated Symfony APIs, and plans each finding that you select.
 - **Claude Code plugin**: both skills, a SessionStart hook and the two subagents of the audit. In a project whose `composer.json` requires any `symfony/*` package, the hook adds one line with the installed Symfony versions. It also works without FrameworkBundle, for example in a console tool or a library. The subagents can only read, search and write files.
 
-This project is not affiliated with, sponsored by or endorsed by Symfony SAS or the Symfony project. See [NOTICE.md](NOTICE.md).
+> [!NOTE]
+> This project is not affiliated with, sponsored by or endorsed by Symfony SAS or the Symfony project. See [NOTICE.md](NOTICE.md).
 
 ## Install
 
